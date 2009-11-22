@@ -1,0 +1,4 @@
+LDAP *			T_PTR
+LDAPMessage *	T_PTR
+LDAPMessage **	T_PTR
+BerElement *	T_PTR

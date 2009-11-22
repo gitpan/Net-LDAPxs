@@ -1,0 +1,6 @@
+Revision history for Perl extension Net::LDAPxs.
+
+0.01  Thu Sep 24 13:46:29 2009
+	- original version; created by h2xs 1.23 with options
+		-O -n Net::LDAPxs ./Net-LDAPxs/xslib/ldapxs.h
+
