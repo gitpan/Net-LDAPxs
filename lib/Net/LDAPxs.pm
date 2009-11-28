@@ -11,21 +11,17 @@ use strict;
 
 use Exporter;
 use DynaLoader;
+use vars qw($VERSION);
 use vars qw($DEFAULT_LDAP_VERSION $DEFAULT_LDAP_PORT $DEFAULT_LDAP_SCHEME);
+
+$VERSION = '0.02';
 
 our @ISA = qw(Exporter DynaLoader);
 
-our %EXPORT_TAGS = ( 'all' => [ qw(
-	TESTVAL
-) ] );
-our @EXPORT_OK = ( 
-	@{ $EXPORT_TAGS{'all'} },
-	'TESTVAL',
+our @EXPORT = ( );
+our @EXPORT_OK = qw(
+	new bind unbind search add abandon compare
 );
-our @EXPORT = qw(
-	new bind unbind search
-);
-our $VERSION = '0.01';
 
 bootstrap Net::LDAPxs;
 
@@ -78,7 +74,12 @@ sub bind {
 
 	$self->{binddn} = $binddn;
 	$self->{bindpasswd} = $arg_ref->{password};
-	$self->_bind();
+	my $rc = $self->_bind();
+
+	if (ref($rc)) {
+		$self->_set_err($$rc);
+		return;
+	}
 }
 
 sub unbind {
@@ -108,6 +109,44 @@ sub search {
 	$self->_search();
 }
 
+sub add {
+	my $self = shift;
+	my $dn = shift;
+	my $arg_ref = { @_ };
+
+	if (exists $arg_ref->{attrs}) {
+		$self->_add($dn, $arg_ref->{attrs});
+	}else{
+		_error('die', "Option 'attrs' is required when using 'add' function");
+	}
+}
+
+sub compare {
+	my $self = shift;
+	my $dn = shift;
+	my $arg_ref = { @_ };
+
+	my $rc = $self->_compare($dn, $arg_ref->{attr}, $arg_ref->{value});
+	if (ref($rc)) {
+		$self->_set_err($$rc);
+		return;
+	}
+}
+
+sub _set_err {
+	my $self = shift;
+	$self->{err} = shift;
+}
+
+sub errstr {
+	my $self = shift;
+	$self->{err};
+}
+
+sub abandon {
+
+}
+
 1;
 
 __END__
@@ -125,8 +164,8 @@ Net::LDAPxs - XS version of Net::LDAP
   $ldap->bind('cn=Manager,dc=shallot,dc=com', password => 'secret');
 
   $msg = $ldap->search( base   => 'ou=language,dc=shallot,dc=com',
-		                filter => '(|(cn=aperture)(cn=shutter_speed))'
-					  );
+                        filter => '(|(cn=aperture)(cn=shutter_speed))'
+                      );
 
   @entries = $msg->entries();
 
@@ -145,7 +184,7 @@ Net::LDAPxs - XS version of Net::LDAP
 Net::LDAPxs is using XS code to glue LDAP C API Perl code. The purpose of 
 developing this module is to thoroughly improve the performance of Net::LDAP. 
 According to the simple test using L<Devel::NYTProf>, it can enhance the 
-performance by nearly 30%.
+performance by nearly 30 times.
 In order to benefit the migration from Net::LDAP to Net::LDAPxs, functions and 
 user interfaces of Net::LDAPxs keep the same as Net::LDAP, which means people 
 who migrate from Net::LDAP to Net::LDAPxs are able to leave their code 
@@ -154,30 +193,29 @@ unchanged excepting altering the module name.
 =head1 CONSTRUCTOR
 
 =item new ( HOST, OPTIONS )
-	HOST can be a host name or an IP address without path information.
+
+HOST can be a host name or an IP address without path information.
+
+=over 4
 
 =item port => N
 
 Port connect to the LDAP server. (Default: 389)
 
-=item scheme => 'ldap' | 'ldaps' | 'ldapi'
-
-(Default: ldap)
+=item scheme => 'ldap' | 'ldaps' | 'ldapi' (Default: ldap)
 
 B<Example>
 
   $ldap = Net::LDAPxs->new('www.qosoft.com',
-		  				 port => '389',
-						 scheme => 'ldap',
-						 version => 3
-		  );
+                           port    => '389',
+                           scheme  => 'ldap',
+                           version => 3
+                          );
 
 =head1 METHODS
 
 Currently, not all methods of Net::LDAP are supported by Net::LDAPxs.
 Here is a list of implemented methods.
-
-=over 4
 
 =item bind ( DN, OPTIONS )
 
@@ -186,8 +224,6 @@ B<Example>
   $ldap->bind('cn=Manager,dc=shallot,dc=com', password => 'secret');
 
 =item unbind ( )
-
-=back
 
 B<Example>
 
@@ -203,17 +239,14 @@ A base option is a DN which is the start search point.
 
 =item filter => ( a string )
 
-A filter is a string which format complies the RFC1960
-
-=back
+A filter is a string which format complies the RFC1960.
 
 B<Example>
+
   (cn=Babs Jensen)
   (!(cn=Tim Howes))
   (&(objectClass=Person)(|(sn=Jensen)(cn=Babs J*)))
   (o=univ*of*mich*)
-
-=over 4
 
 =item scope => 'base' | 'one' | 'sub'
 
@@ -230,16 +263,69 @@ search. The default value is 0, denots no restriction is applied.
 A list of attributes to be returned for each entry. The value is normally a reference 
 to an array which contains the preferred attributes.
 
+B<Example>
+
+  $msg = $ldap->search( base      => 'ou=language,dc=shallot,dc=com',
+						filter    => '(|(cn=aperture)(cn=shutter_speed))',
+						scope     => 'one',
+						sizelimit => 0,
+						attrs     => \@attrs
+						);
+
 =back
+
+=item compare ( DN, OPTIONS )
+
+Compare values in an attribute in the entry given by DN on the server. DN is a string.
+If the compare is failed, errstr() method can be used to fetch the reason for the failure.
+
+=over 4
+
+=item attrs => attributeType
+
+The name of the attribute type to compare.
+
+=item value => attributeValue
+
+The attribute value to compare with.
 
 B<Example>
 
-  $msg = $ldap->search( base   		=> 'ou=language,dc=shallot,dc=com',
-						filter		=> '(|(cn=aperture)(cn=shutter_speed))',
-						scope		=> 'one',
-						sizelimit	=> 0,
-						attrs		=> \@attrs
-						);
+  if (!defined $ldap->compare('ou=people,dc=shallot,dc=com',
+          attr  => 'objectClass',
+          value => 'top'
+      )) {
+      print $ldap->errstr;
+  }
+
+=back
+
+=item add ( DN, OPTIONS )
+
+Add a new entry to the LDAP directiory. DN is a string.
+
+=over 4
+
+=item attrs => VALUE
+
+C<VALUE> should be a hash reference.
+
+B<Example>
+
+  my %attrs = (
+    uid => 'Lionel',
+    cn  => 'Lionel',
+    sn  => 'Luthor',
+    uidNumber    => '65534',
+    gidNumber    => '65534',
+    homeDirectory => '/home/Lionel',
+    loginShell  => '/bin/bash',
+    objectClass => [qw(inetOrgPerson posixAccount top)]
+  );
+
+  $ldap->add( 'uid=Lionel,ou=people,dc=shallot,dc=com',
+              attrs => \%attrs
+            );
 
 =head1 DEVELOPMENT STAGE
 
