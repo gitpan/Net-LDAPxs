@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Net-LDAPxs
-version:            0.02
+version:            0.03
 abstract:           XS version of Net::LDAP
 author:
     - Pan Yu <xiaocong[at]vip.163.com>

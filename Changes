@@ -6,6 +6,10 @@ Revision history for Perl extension Net::LDAPxs.
 0.02 Sat Nov 28 2009
 	- add new functions
 	- fix bugs
-	- document update
+	- update document
 	- improve error detection
+0.03 Sun Nov 29 2009
+	- add function delete
+	- fix bugs
+	- update document
 

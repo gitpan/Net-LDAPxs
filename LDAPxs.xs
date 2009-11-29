@@ -378,8 +378,32 @@ _compare(class, dn, attr, value)
 		bvalue.bv_len = strlen( bvalue.bv_val );
 
 		rc = ldap_compare_ext_s(ld, dn, attr, &bvalue, NULL, NULL); 
+		free(bvalue.bv_val);
+
 		EXTEND(SP, 1);
 		if (rc == LDAP_COMPARE_TRUE) {
+			PUSHs(sv_2mortal(newSViv(rc)));
+		}else{
+			SV* errorno = newSVpv(ldap_err2string(rc), 0);
+			PUSHs(sv_2mortal(newRV_noinc((SV*)errorno)));
+		}
+
+int
+_delete(class, dn)
+		HV* class
+		char *dn
+	PREINIT:
+		LDAP* ld;
+		SV** svp;
+
+		int rc;
+	PPCODE:
+		if ((svp = hv_fetch(class, "ld", 2, FALSE)))
+			ld = (LDAP *)SvIV(*svp);
+
+		rc = ldap_delete_ext_s(ld, dn, NULL, NULL);
+		EXTEND(SP, 1);
+		if (rc == LDAP_SUCCESS) {
 			PUSHs(sv_2mortal(newSViv(rc)));
 		}else{
 			SV* errorno = newSVpv(ldap_err2string(rc), 0);

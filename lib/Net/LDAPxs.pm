@@ -14,13 +14,13 @@ use DynaLoader;
 use vars qw($VERSION);
 use vars qw($DEFAULT_LDAP_VERSION $DEFAULT_LDAP_PORT $DEFAULT_LDAP_SCHEME);
 
-$VERSION = '0.02';
+$VERSION = '0.03';
 
 our @ISA = qw(Exporter DynaLoader);
 
 our @EXPORT = ( );
 our @EXPORT_OK = qw(
-	new bind unbind search add abandon compare
+	new bind unbind search add compare delete
 );
 
 bootstrap Net::LDAPxs;
@@ -133,6 +133,17 @@ sub compare {
 	}
 }
 
+sub delete {
+	my $self = shift;
+	my $dn = shift;
+
+	my $rc = $self->_delete($dn);
+	if (ref($rc)) {
+		$self->_set_err($$rc);
+		return;
+	}
+}
+
 sub _set_err {
 	my $self = shift;
 	$self->{err} = shift;
@@ -143,9 +154,6 @@ sub errstr {
 	$self->{err};
 }
 
-sub abandon {
-
-}
 
 1;
 
@@ -198,11 +206,13 @@ HOST can be a host name or an IP address without path information.
 
 =over 4
 
-=item port => N
+=item port => ( number ) (Default: 389)
 
-Port connect to the LDAP server. (Default: 389)
+Port connect to the LDAP server.
 
 =item scheme => 'ldap' | 'ldaps' | 'ldapi' (Default: ldap)
+
+=back
 
 B<Example>
 
@@ -241,6 +251,8 @@ A base option is a DN which is the start search point.
 
 A filter is a string which format complies the RFC1960.
 
+=back
+
 B<Example>
 
   (cn=Babs Jensen)
@@ -263,14 +275,16 @@ search. The default value is 0, denots no restriction is applied.
 A list of attributes to be returned for each entry. The value is normally a reference 
 to an array which contains the preferred attributes.
 
+=back
+
 B<Example>
 
   $msg = $ldap->search( base      => 'ou=language,dc=shallot,dc=com',
-						filter    => '(|(cn=aperture)(cn=shutter_speed))',
-						scope     => 'one',
-						sizelimit => 0,
-						attrs     => \@attrs
-						);
+                        filter    => '(|(cn=aperture)(cn=shutter_speed))',
+                        scope     => 'one',
+                        sizelimit => 0,
+                        attrs     => \@attrs
+                      );
 
 =back
 
@@ -288,6 +302,8 @@ The name of the attribute type to compare.
 =item value => attributeValue
 
 The attribute value to compare with.
+
+=back
 
 B<Example>
 
@@ -310,6 +326,8 @@ Add a new entry to the LDAP directiory. DN is a string.
 
 C<VALUE> should be a hash reference.
 
+=back
+
 B<Example>
 
   my %attrs = (
@@ -326,6 +344,20 @@ B<Example>
   $ldap->add( 'uid=Lionel,ou=people,dc=shallot,dc=com',
               attrs => \%attrs
             );
+
+=back
+
+=item delete ( DN )
+
+Delete the entry given by C<DN> from the server. C<DN> is a string.
+
+B<Example>
+
+  if (!defined $ldap->delete('uid=Lionel,ou=people,dc=shallot,dc=com')) {
+	  print $ldap->errstr;
+  }
+
+=back
 
 =head1 DEVELOPMENT STAGE
 
