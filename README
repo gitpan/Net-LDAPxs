@@ -1,4 +1,4 @@
-Net-LDAPxs version 0.03
+Net-LDAPxs version 0.04
 =======================
 
 Net::LDAPxs is using XS code to glue LDAP C API Perl code. The purpose of developing this module is to thoroughly improve the performance of Net::LDAP.  According to the simple test using L<Devel::NYTProf>, it can enhance the performance by nearly 30%.

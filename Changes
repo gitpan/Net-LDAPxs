@@ -12,4 +12,9 @@ Revision history for Perl extension Net::LDAPxs.
 	- add function delete
 	- fix bugs
 	- update document
+0.04 Wed Dec 21 2009
+	- add control function
+		server side sorting countrol
+	- fix bugs
+	- update document
 

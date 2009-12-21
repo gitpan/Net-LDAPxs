@@ -253,7 +253,7 @@ _search(class)
 		HV* class
 	PREINIT:
 		LDAP* ld;
-		int rc;
+		int rc, parse_rc;
 		SV** svp;
 
 		char *base;
@@ -267,6 +267,19 @@ _search(class)
 		char **attrs = NULL;
 		LDAPMessage *res;
 		AV* entries;
+
+		HV* ctrl;
+		int type = 0;
+		char *value;
+		int critical;
+
+		char *attrfail, *matched = NULL, *errmsg = NULL; 
+		char **vals, **referrals;
+		unsigned long rcode;
+		LDAPControl *sortctrl = NULL;
+		LDAPControl *requestctrls[2];
+		LDAPControl **resultctrls = NULL;
+		LDAPSortKey **sortkeylist;
 	PPCODE:
 		if ((svp = hv_fetch(class, "ld", 2, FALSE)))
 			ld = (LDAP *)SvIV(*svp);
@@ -291,13 +304,74 @@ _search(class)
 			}
 			attrs[i] = NULL;
 		}
+		if ((svp = hv_fetch(class, "control", 7, FALSE))) {
+			if (SvROK(*svp) && SvTYPE(SvRV(*svp)) == SVt_PVHV) {
+				ctrl = (HV*)SvRV(*svp);
+				if ((svp = hv_fetch(ctrl, "type", 4, FALSE)))
+					type = SvIV(*svp);
+				if ((svp = hv_fetch(ctrl, "value", 5, FALSE)))
+					value = (char *)SvPV_nolen(*svp);
+				if ((svp = hv_fetch(ctrl, "critical", 8, FALSE)))
+					critical = SvIV(*svp);
+			}
+			switch (type) {
+				case 1: 
+					ldap_create_sort_keylist( &sortkeylist, value );
+					rc = ldap_create_sort_control( ld, sortkeylist, 1, &sortctrl ); 
+					if (rc != LDAP_SUCCESS) { 
+						fprintf( stderr, "ldap_create_sort_control: %s\n", ldap_err2string(rc) ); 
+						ldap_unbind(ld); 
+						exit( EXIT_FAILURE );
+					} 
+					requestctrls[0] = sortctrl; 
+					requestctrls[1] = NULL;
+					break;
+				default:
+					Perl_croak(aTHX_ "Unknown control type"); 
+					break;
+			}
+		}else{
+			/* there is no control required */
+			requestctrls[0] = NULL;
+			requestctrls[1] = NULL;
+		}
+
 		if (ldap_search_ext_s(ld, base, scope, filter, attrs, 0,
-					NULL, NULL, LDAP_NO_LIMIT, sizelimit, &res) != LDAP_SUCCESS) {
+					requestctrls, NULL, LDAP_NO_LIMIT, sizelimit, &res) != LDAP_SUCCESS) {
 			ldap_perror(ld, "ldap_search_ext_s");
 			exit( EXIT_FAILURE );
 		}
-		free(attrs);
+		switch (type) {
+			case 1:
+				parse_rc = ldap_parse_result( ld, res, &rc, &matched, &errmsg, &referrals, &resultctrls, 0 ); 
+				if (parse_rc != LDAP_SUCCESS) { 
+					fprintf( stderr, "ldap_parse_result: %s\n", ldap_err2string(parse_rc) ); 
+					ldap_unbind(ld); 
+					exit( EXIT_FAILURE );
+				} 
 
+				parse_rc = ldap_parse_sort_control( ld, resultctrls, &rcode, &attrfail );
+				if (parse_rc != LDAP_SUCCESS) { 
+					fprintf( stderr, "ldap_parse_sort_control: %s\n", ldap_err2string(parse_rc) ); 
+					ldap_unbind(ld); 
+					exit( EXIT_FAILURE );
+				} 
+				if (rcode != LDAP_SUCCESS) { 
+					fprintf( stderr, "Sort error: %s\n", ldap_err2string(rcode) ); 
+					if (attrfail != NULL && *attrfail != '\0') { 
+						fprintf( stderr, "Bad attribute: %s\n", attrfail ); 
+					} 
+					ldap_unbind(ld); 
+					exit( EXIT_FAILURE );
+				} 
+				ldap_free_sort_keylist( sortkeylist );
+				ldap_control_free( sortctrl );
+				ldap_controls_free( resultctrls );
+				break;
+			default:
+				break;
+		}
+		free(attrs);
 		/* store all entries */
 		entries = get_entries(ld, res);
 		ldap_msgfree(res);
@@ -409,4 +483,40 @@ _delete(class, dn)
 			SV* errorno = newSVpv(ldap_err2string(rc), 0);
 			PUSHs(sv_2mortal(newRV_noinc((SV*)errorno)));
 		}
+
+
+
+MODULE = Net::LDAPxs		PACKAGE = Net::LDAPxs::Control::Sort		
+
+REQUIRE:    1.929
+
+INCLUDE: const-xs.inc
+
+
+void *
+new(class, args_ref)
+		char *class
+		SV *args_ref
+	PREINIT:
+		HV *args;
+		char *value;
+		int critical;
+
+		LDAP* ld;
+		SV** svp;
+	PPCODE:
+		if (SvROK(args_ref) &&
+			SvTYPE(SvRV(args_ref)) == SVt_PVHV)
+		{
+			args = (HV*)SvRV(args_ref);
+		}else{
+			Perl_croak(aTHX_ "Usage: Net::LDAPxs->new(HOST, port => PORT)");
+		}
+
+		if ((svp = hv_fetch(args, "value", 5, FALSE)))
+			value = (char *)SvPV_nolen(*svp);
+		if ((svp = hv_fetch(args, "critical", 8, FALSE)))
+			critical = SvIV(*svp);
+
+		printf("%s", value);
 

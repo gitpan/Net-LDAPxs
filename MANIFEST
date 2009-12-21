@@ -11,4 +11,5 @@ fallback/const-xs.inc
 lib/Net/LDAPxs.pm
 lib/Net/LDAPxs/Search.pm
 lib/Net/LDAPxs/Entry.pm
+lib/Net/LDAPxs/Control.pm
 META.yml                                 Module meta-data (added by MakeMaker)

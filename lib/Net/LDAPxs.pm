@@ -14,7 +14,7 @@ use DynaLoader;
 use vars qw($VERSION);
 use vars qw($DEFAULT_LDAP_VERSION $DEFAULT_LDAP_PORT $DEFAULT_LDAP_SCHEME);
 
-$VERSION = '0.03';
+$VERSION = '0.04';
 
 our @ISA = qw(Exporter DynaLoader);
 
@@ -105,8 +105,18 @@ sub search {
 		$arg_ref->{scope} = 2;
 	}
 	$self->{sizelimit} = $arg_ref->{sizelimit} || 0;
-	$self->{attrs} = $arg_ref->{attrs};
-	$self->_search();
+	$self->{attrs} = $arg_ref->{attrs} if (defined $arg_ref->{attrs});
+	# process control if present
+	$self->{control} = $arg_ref->{control} if (defined $arg_ref->{control}); 
+	my $mesg = $self->_search();
+
+	# process callback if present
+	if (defined $arg_ref->{callback}) {
+		foreach my $entry ($mesg->entries) {
+			$arg_ref->{callback}($mesg, $entry);
+		}
+	}
+	return $mesg;
 }
 
 sub add {
@@ -260,6 +270,8 @@ B<Example>
   (&(objectClass=Person)(|(sn=Jensen)(cn=Babs J*)))
   (o=univ*of*mich*)
 
+=over 4
+
 =item scope => 'base' | 'one' | 'sub'
 
 The default value is 'sub' which means it will search all subtrees. 'base' means only 
@@ -286,7 +298,26 @@ B<Example>
                         attrs     => \@attrs
                       );
 
+=item control => ( CONTROL )
+
+A control is a reference to a HASH which may contain the three elements "type", "value" and "critical". 
+
+For more information see L<Net::LDAPxs::Control>.
+
 =back
+
+B<Example>
+
+  use Net::LDAPxs::Control;
+
+  $ctrl = Net::LDAPxs::Control->new(
+          type  => '1.2.840.113556.1.4.473',
+          value => 'sn -cn',
+          critical => 0
+          );
+
+  $msg = $ldap->search( base    => $base,
+                        control => $ctrl );
 
 =item compare ( DN, OPTIONS )
 
