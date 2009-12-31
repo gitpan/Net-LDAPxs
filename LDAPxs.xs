@@ -13,6 +13,7 @@
 /* Prototypes */
 LDAP* _connect(char *, int, int, char *);
 void ldap_add_mods(HV*, LDAPMod ***);
+void ldapmod_struct(AV*, LDAPMod ***);
 void free_attrs(LDAPMod **);
 AV* get_entries(LDAP *, LDAPMessage *);
 
@@ -58,6 +59,70 @@ free_attrs(LDAPMod **list_of_attrs)
 }
 
 void
+ldapmod_struct(AV* attrs_av, LDAPMod ***list_of_attrs)
+{
+/* the data structure of attrs_av is like this
+$VAR1 = [
+          {
+            'type' => 'cn',
+		    'vals' => [
+		                'buy2',
+		                'buy3'
+		              ],
+		    'changetype' => 0
+		  },
+		  {
+		    'type' => 'ca',
+		    'vals' => [
+		                'test123'
+		              ],
+            'changetype' => 0
+          }
+        ];
+*/
+	int len, j;
+
+	len = av_len(attrs_av) + 1;
+	*list_of_attrs = (LDAPMod **)malloc((len+1)*sizeof(LDAPMod *));
+	for (j = 0; j < len; j++) {
+		HV* attrs_hv;
+		AV *val_array;
+		LDAPMod mods;
+		SV **elem;
+		SV **svp;
+		int len_vals, i;
+
+		elem = av_fetch(attrs_av, j, 0);
+		if (elem != NULL) {
+			attrs_hv = (HV*)SvRV(*elem);
+			if ((svp = hv_fetch(attrs_hv, "changetype", 10, FALSE)))
+				mods.mod_op = SvIV(*svp);
+			if ((svp = hv_fetch(attrs_hv, "type", 4, FALSE)))
+				mods.mod_type = (char *)SvPV_nolen(*svp);
+			if ((svp = hv_fetch(attrs_hv, "vals", 4, FALSE)))
+				val_array = (AV*)SvRV(*svp);
+
+			len_vals = av_len(val_array) + 1;
+			mods.mod_values = (char **)malloc((len_vals+1)*sizeof(char *));
+			for (i = 0; i < len_vals; i++) {
+				elem = av_fetch(val_array, i, 0);
+				if (elem != NULL) {
+					mods.mod_values[i] = (char *)SvPV_nolen(*elem);
+				}
+			}
+			mods.mod_values[i] = NULL;
+			/* add the constructed LDAPMod to the list of attrs */
+			(*list_of_attrs)[j] = (LDAPMod *)malloc(sizeof(LDAPMod));
+			*((*list_of_attrs)[j]) = mods;
+		}
+	}
+	/* list of attrs should be a NULL terminated array */
+	(*list_of_attrs)[j] = NULL;
+}
+
+/* ldap_add_mods has the same function of ldapmod_struct, but operated in a
+   different way. This function is deprecated */
+void
 ldap_add_mods(HV* attrs_hv, LDAPMod ***list_of_attrs)
 {
 	char **attrs = NULL;
@@ -72,6 +137,7 @@ ldap_add_mods(HV* attrs_hv, LDAPMod ***list_of_attrs)
 	for (j = 0; j< count; j++) {
 		LDAPMod mods;
 		//val = hv_iternextsv(attrs_hv, (char **) &key, &klen);
+		mods.mod_op = 0;
 		val = hv_iternextsv(attrs_hv, (char **) &mods.mod_type, &klen);
 		if (SvTYPE(SvRV(val)) == SVt_PVAV) {
 		    /* In case of multi-value */
@@ -99,6 +165,7 @@ ldap_add_mods(HV* attrs_hv, LDAPMod ***list_of_attrs)
 	}
 	(*list_of_attrs)[j] = NULL;
 }
+
 
 AV*
 get_entries(LDAP *ld, LDAPMessage *res)
@@ -401,6 +468,7 @@ count(ld, res)
 	OUTPUT:
 		RETVAL
 
+
 void
 _add(class, dn, attrs_ref)
 		HV* class
@@ -410,8 +478,6 @@ _add(class, dn, attrs_ref)
 		LDAP* ld;
 		SV** svp;
 		HV *attrs_hv;
-
-		int msgidp=0;
 	PPCODE:
 		if ((svp = hv_fetch(class, "ld", 2, FALSE)))
 			ld = (LDAP *)SvIV(*svp);
@@ -423,14 +489,83 @@ _add(class, dn, attrs_ref)
 
 			LDAPMod **list_of_attrs; 
 			ldap_add_mods(attrs_hv, &list_of_attrs);
-			if (ldap_add_ext(ld, dn, list_of_attrs, NULL, NULL, &msgidp) != LDAP_SUCCESS) {
-				ldap_perror(ld, "ldap_add_ext");
+			if (ldap_add_ext_s(ld, dn, list_of_attrs, NULL, NULL) != LDAP_SUCCESS) {
+				ldap_perror(ld, "ldap_add_ext_s");
 				exit( EXIT_FAILURE );
 			}
 			free_attrs(list_of_attrs);
 		}else{
 			Perl_croak(aTHX_ "The value for option 'attrs' should be a hash ref");
 		}
+
+
+void
+_modify(class, dn, attrs_ref)
+		HV* class
+		char *dn
+		SV* attrs_ref
+	PREINIT:
+		LDAP* ld;
+		SV** svp;
+		AV *attrs_av;
+	PPCODE:
+		if ((svp = hv_fetch(class, "ld", 2, FALSE)))
+			ld = (LDAP *)SvIV(*svp);
+
+		if (SvROK(attrs_ref) &&
+			SvTYPE(SvRV(attrs_ref)) == SVt_PVAV)
+		{
+			attrs_av = (AV*)SvRV(attrs_ref);
+
+			LDAPMod **list_of_attrs; 
+			ldapmod_struct(attrs_av, &list_of_attrs);
+			if (ldap_modify_ext_s(ld, dn, list_of_attrs, NULL, NULL) != LDAP_SUCCESS) {
+				ldap_perror(ld, "ldap_modify_ext_s");
+				exit( EXIT_FAILURE );
+			}
+			free_attrs(list_of_attrs);
+		}else{
+			Perl_croak(aTHX_ "The value for option should be a hash ref");
+		}
+
+
+void
+_moddn(class, dn, attrs_ref)
+		HV* class
+		char *dn
+		SV* attrs_ref
+	PREINIT:
+		LDAP* ld;
+		SV** svp;
+		HV *attrs_hv;
+
+		char *newrdn=NULL;
+		char *newSuperior=NULL;
+		int deleteoldrdn;
+	PPCODE:
+		if ((svp = hv_fetch(class, "ld", 2, FALSE)))
+			ld = (LDAP *)SvIV(*svp);
+
+		if (SvROK(attrs_ref) &&
+			SvTYPE(SvRV(attrs_ref)) == SVt_PVHV)
+		{
+			attrs_hv = (HV*)SvRV(attrs_ref);
+
+			if ((svp = hv_fetch(attrs_hv, "newrdn", 6, FALSE)))
+				newrdn = (char *)SvPV_nolen(*svp);
+			if ((svp = hv_fetch(attrs_hv, "newSuperior", 11, FALSE)))
+				newSuperior = (char *)SvPV_nolen(*svp);
+			if ((svp = hv_fetch(attrs_hv, "deleteoldrdn", 12, FALSE)))
+				deleteoldrdn = SvIV(*svp);
+
+			if (ldap_rename_s(ld, dn, newrdn, newSuperior, deleteoldrdn, NULL, NULL) != LDAP_SUCCESS) {
+				ldap_perror(ld, "ldap_rename_s");
+				exit( EXIT_FAILURE );
+			}
+		}else{
+			Perl_croak(aTHX_ "The value for option should be a hash ref");
+		}
+
 
 int
 _compare(class, dn, attr, value)

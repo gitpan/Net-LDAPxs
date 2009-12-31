@@ -14,13 +14,13 @@ use DynaLoader;
 use vars qw($VERSION);
 use vars qw($DEFAULT_LDAP_VERSION $DEFAULT_LDAP_PORT $DEFAULT_LDAP_SCHEME);
 
-$VERSION = '0.04';
+$VERSION = '0.05';
 
 our @ISA = qw(Exporter DynaLoader);
 
 our @EXPORT = ( );
 our @EXPORT_OK = qw(
-	new bind unbind search add compare delete
+	new bind unbind search add compare delete modify moddn
 );
 
 bootstrap Net::LDAPxs;
@@ -47,9 +47,9 @@ sub _check_options {
 	if (grep { /^-/ } keys %$arg_ref) {
 		_error('die', "Leading - for options is NOT supported");
 	}
-	$arg_ref->{'port'} = $arg_ref->{'port'} || $DEFAULT_LDAP_PORT;
-	$arg_ref->{'version'} = $arg_ref->{'version'} || $DEFAULT_LDAP_VERSION;
-	$arg_ref->{'scheme'} = $arg_ref->{'scheme'} || $DEFAULT_LDAP_SCHEME;
+	$arg_ref->{'port'} ||= $DEFAULT_LDAP_PORT;
+	$arg_ref->{'version'} ||= $DEFAULT_LDAP_VERSION;
+	$arg_ref->{'scheme'} ||= $DEFAULT_LDAP_SCHEME;
 }
 
 sub new {
@@ -104,7 +104,7 @@ sub search {
 	}else{
 		$arg_ref->{scope} = 2;
 	}
-	$self->{sizelimit} = $arg_ref->{sizelimit} || 0;
+	$self->{sizelimit} ||= 0;
 	$self->{attrs} = $arg_ref->{attrs} if (defined $arg_ref->{attrs});
 	# process control if present
 	$self->{control} = $arg_ref->{control} if (defined $arg_ref->{control}); 
@@ -128,6 +128,47 @@ sub add {
 		$self->_add($dn, $arg_ref->{attrs});
 	}else{
 		_error('die', "Option 'attrs' is required when using 'add' function");
+	}
+}
+
+my %operation = ( 'add' => 0, 'delete' => 1, 'replace' => 2, 'increment' => 3 );
+sub modify {
+	my $self = shift;
+	my $dn = shift;
+	my $arg_ref = { @_ };
+	my @options;
+
+	# in order to be compatible with Net::LDAP
+	$arg_ref = $arg_ref->{changes} if (exists $arg_ref->{changes});
+
+	foreach my $op (qw(add delete replace increment)) {
+		next unless exists $arg_ref->{$op};
+		my ($key, $val);
+		while (($key, $val) = each %{$arg_ref->{$op}}) {
+			my $attrs;
+			$attrs->{'changetype'} = $operation{$op};
+			$attrs->{'type'} = $key;
+			if (ref($val) eq 'ARRAY') {
+				$attrs->{'vals'} = $val;
+			}else{
+				$attrs->{'vals'} = [ $val ];
+			}
+			push (@options, $attrs);
+		}
+	}
+	$self->_modify($dn, \@options);
+}
+
+sub moddn {
+	my $self = shift;
+	my $dn = shift;
+	my $arg_ref = { @_ };
+
+	if (exists $arg_ref->{newrdn}) {
+		$arg_ref->{deleteoldrdn} ||= 1;
+		$self->_moddn($dn, $arg_ref);
+	}else{
+		_error('die', "Option 'newrdn' is required");
 	}
 }
 
@@ -373,8 +414,7 @@ B<Example>
   );
 
   $ldap->add( 'uid=Lionel,ou=people,dc=shallot,dc=com',
-              attrs => \%attrs
-            );
+              attrs => \%attrs );
 
 =back
 
@@ -388,13 +428,139 @@ B<Example>
 	  print $ldap->errstr;
   }
 
+=item moddn ( DN, OPTIONS )
+
+Rename the entry given by C<DN> which should be a string.
+
+=over 4
+
+=item newrdn => RDN
+
+This value should be a new RDN to assign to C<DN>.
+
+=item deleteoldrdn => 1
+
+This option should be passwd if the existing RDN is to be deleted.
+
+=item newsuperior => NEWDN
+
+If given this value should be the DN of the new superior for C<DN>.
+
 =back
+
+B<Example>
+
+  $mesg = $ldap->moddn( uid=Lionel,ou=people,dc=shallot,dc=com, 
+                        newrdn => 'uid=Peter' );
+
+=item modify ( DN, OPTIONS )
+
+Modify the contents of the entry given by C<DN> which should be a string.
+
+=over 4
+
+=item add => { ATTR => VALUE, ... }
+
+Add more attributes or values to the entry. C<VALUE> should be a
+string if only a single value is wanted in the attribute, or a
+reference to an array of strings if multiple values are wanted.
+
+  %attrs = ( cn => ['buy', 'purchase'],
+		     description => 'to own something' );
+  $mesg = $ldap->modify( $dn,
+                         add => \%attrs );
+
+=item delete => [ ATTR, ... ]
+
+Delete complete attributes from the entry.
+
+  $mesg = $ldap->modify( $dn,
+    delete => ['member','description'] # Delete attributes
+  );
+
+=item delete => { ATTR => VALUE, ... }
+
+Delete individual values from an attribute. C<VALUE> should be a
+string if only a single value is being deleted from the attribute, or
+a reference to an array of strings if multiple values are being
+deleted.
+
+If C<VALUE> is a reference to an empty array or all existing values
+of the attribute are being deleted, then the attribute will be
+deleted from the entry.
+
+  $mesg = $ldap->modify( $dn,
+    delete => {
+      description => 'List of members',
+      member      => [
+        'cn=member1,ou=people,dc=example,dc=com',    # Remove members
+        'cn=member2,ou=people,dc=example,dc=com',
+      ],
+      seeAlso => [],   # Remove attribute
+    }
+  );
+
+=item replace => { ATTR => VALUE, ... }
+
+Replace any existing values in each given attribute with
+C<VALUE>. C<VALUE> should be a string if only a single value is wanted
+in the attribute, or a reference to an array of strings if multiple
+values are wanted. A reference to an empty array will remove the
+entire attribute. If the attribute does not already exist in the
+entry, it will be created.
+
+  $mesg = $ldap->modify( $dn,
+    replace => {
+      description => 'New List of members', # Change the description
+      member      => [ # Replace whole list with these
+        'cn=member1,ou=people,dc=example,dc=com',   
+        'cn=member2,ou=people,dc=example,dc=com',
+      ],
+      seeAlso => [],   # Remove attribute
+    }
+  );
+
+=item increment => { ATTR => VALUE, ... }
+
+Atomically increment the existing value in each given attribute by the
+provided C<VALUE>. The attributes need to have integer syntax, or be
+otherwise "incrementable". Note this will only work if the server
+advertizes support for LDAP_FEATURE_MODIFY_INCREMENT. 
+
+  $mesg = $ldap->modify( $dn,
+    increment => {
+      uidNumber => 1 # increment uidNumber by 1
+    }
+  );
+
+=item changes => [ OP => [ ATTR => VALUE ], ... ]
+
+This is an alternative to B<add>, B<delete>, B<replace> and B<increment>
+where the whole operation can be given in a single argument. C<OP>
+should be B<add>, B<delete>, B<replace> or B<increment>. C<VALUE> should
+be either a string or a reference to an array of strings, as before.
+
+Use this form if you want to control the order in which the operations
+will be performed.
+
+  $mesg = $ldap->modify( $dn,
+    changes => [
+      add => [
+        description => 'A description',
+        member      => $newMember,
+      ],
+      delete => [
+        seeAlso => [],
+      ],
+      add => [
+        anotherAttribute => $value,
+      ],
+    ]
+  );
 
 =head1 DEVELOPMENT STAGE
 
-This module is still under development. The basic features in terms of binding and 
-searching result have been done. Further functions such as add, delete and modify 
-entries will be provided soon.
+This module is still under development. The basic features have been done.  
 
 =head1 BUGS and RECOMMENDATIONS
 
@@ -418,3 +584,4 @@ This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself.
 
 =cut
+

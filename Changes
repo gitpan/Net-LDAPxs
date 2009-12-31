@@ -17,4 +17,7 @@ Revision history for Perl extension Net::LDAPxs.
 		server side sorting countrol
 	- fix bugs
 	- update document
+0.05 Wed Dec 30 2009
+	- modify function
+	- moddn function
 
