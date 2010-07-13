@@ -16,6 +16,7 @@ void ldap_add_mods(HV*, LDAPMod ***);
 void ldapmod_struct(AV*, LDAPMod ***);
 void free_attrs(LDAPMod **);
 AV* get_entries(LDAP *, LDAPMessage *);
+SV* rc_exception(int);
 
 LDAP* 
 _connect(char *host, int port, int version, char *scheme)
@@ -95,12 +96,21 @@ $VAR1 = [
 		elem = av_fetch(attrs_av, j, 0);
 		if (elem != NULL) {
 			attrs_hv = (HV*)SvRV(*elem);
-			if ((svp = hv_fetch(attrs_hv, "changetype", 10, FALSE)))
+			if ((svp = hv_fetch(attrs_hv, "changetype", 10, FALSE)) && SvIOK(*svp)) {
 				mods.mod_op = SvIV(*svp);
-			if ((svp = hv_fetch(attrs_hv, "type", 4, FALSE)))
+			}else{
+				croak("changetype is wrong");
+			}
+			if ((svp = hv_fetch(attrs_hv, "type", 4, FALSE)) && SvPOK(*svp)) {
 				mods.mod_type = (char *)SvPV_nolen(*svp);
-			if ((svp = hv_fetch(attrs_hv, "vals", 4, FALSE)))
+			}else{
+				croak("type is wrong");
+			}
+			if ((svp = hv_fetch(attrs_hv, "vals", 4, FALSE)) && SvROK(*svp)) {
 				val_array = (AV*)SvRV(*svp);
+			}else{
+				croak("vals is wrong");
+			}
 
 			len_vals = av_len(val_array) + 1;
 			mods.mod_values = (char **)malloc((len_vals+1)*sizeof(char *));
@@ -120,15 +130,12 @@ $VAR1 = [
 	(*list_of_attrs)[j] = NULL;
 }
 
-/* ldap_add_mods has the same function of ldapmod_struct, but operated in a
-   different way. This function is deprecated */
+/* ldap_add_mods has the same function of ldapmod_struct, but operated in a different way. This function is deprecated */
 void
 ldap_add_mods(HV* attrs_hv, LDAPMod ***list_of_attrs)
 {
-	char **attrs = NULL;
 	int count, j;
 
-	char *key;
 	I32 klen;
 	SV *val;
 
@@ -180,17 +187,25 @@ get_entries(LDAP *ld, LDAPMessage *res)
 	struct berval val;
 
 	for(e = ldap_first_entry(ld, res), i = 0; e != NULL; e = ldap_next_entry(ld, e)) { 
+		HV* entry_hash;
+		AV* attr_array;
+		HV* stash;
+		SV* object;
+
 		dn = ldap_get_dn(ld, e);
 		/* one entry per hash */
-		HV* entry_hash = newHV();
+		entry_hash = newHV();
 		/* attributes array */
-		AV* attr_array = newAV();
+		attr_array = newAV();
 		for ( a = ldap_first_attribute(ld, e, &ptr), j = 0; a != NULL; a = ldap_next_attribute(ld, e, ptr) ) {
+			HV* attr_hash;
+			AV* val_array;
+
 			vals = ldap_get_values_len(ld, e, a);
 			/* one attribute of an entry */
-			HV* attr_hash = newHV();
+			attr_hash = newHV();
 			/* values of an attribute */
-			AV* val_array = newAV();
+			val_array = newAV();
 			for (k = 0; vals[k] != NULL; k++) {
 				val = *vals[k];
 				av_store(val_array, k, newSVpv(val.bv_val, 0));
@@ -205,8 +220,7 @@ get_entries(LDAP *ld, LDAPMessage *res)
 		hv_store(entry_hash, "objectName", 10, newSVpv(dn, 0), 0);
 		hv_store(entry_hash, "attributes", 10, newRV_noinc((SV*)attr_array), 0);
 		/* setup a new object called Net::LDAPxs::Entry for every entry */
-		HV* stash = gv_stashpv("Net::LDAPxs::Entry", GV_ADDWARN);
-		SV* object;
+		stash = gv_stashpv("Net::LDAPxs::Entry", GV_ADDWARN);
 		object = newRV_noinc((SV*)entry_hash);
 		sv_bless(object, stash);
 
@@ -220,6 +234,25 @@ get_entries(LDAP *ld, LDAPMessage *res)
 }
 
 
+SV *
+rc_exception(int rc)
+{
+	HV* stash;
+	SV* object;
+	HV* exception;
+
+	exception = newHV();
+	hv_store(exception, "code", 4, newSViv(rc), 0);
+	hv_store(exception, "mesg", 4, newSVpv(ldap_err2string(rc),0),0);
+
+	stash = gv_stashpv("Net::LDAPxs::Exception", GV_ADDWARN);
+	object = newRV_inc((SV*)exception);
+	sv_bless(object, stash);
+
+	return object;
+}
+
+
 MODULE = Net::LDAPxs		PACKAGE = Net::LDAPxs		
 
 REQUIRE:    1.929
@@ -227,9 +260,8 @@ REQUIRE:    1.929
 INCLUDE: const-xs.inc
 
 
-void *
+LDAP *
 _new(class, args_ref)
-		char *class
 		SV *args_ref
 	PREINIT:
 		HV *args;
@@ -237,89 +269,115 @@ _new(class, args_ref)
 		int port;
 		int version;
 		char *scheme;
-		LDAP* ld;
 		SV** svp;
-	PPCODE:
+	CODE:
 		if (SvROK(args_ref) &&
 			SvTYPE(SvRV(args_ref)) == SVt_PVHV)
 		{
 			args = (HV*)SvRV(args_ref);
 		}else{
-			Perl_croak(aTHX_ "Usage: Net::LDAPxs->new(HOST, port => PORT)");
+			croak("Usage: Net::LDAPxs->new(HOST, port => PORT)");
 		}
-
-		if ((svp = hv_fetch(args, "host", 4, FALSE)))
+		if ((svp = hv_fetch(args, "host", 4, FALSE)) && SvPOK(*svp)) {
 			host = (char *)SvPV_nolen(*svp);
-		if ((svp = hv_fetch(args, "port", 4, FALSE)))
-			port = SvIV(*svp);
-		if ((svp = hv_fetch(args, "version", 7, FALSE)))
-			version = SvIV(*svp);
-		if ((svp = hv_fetch(args, "scheme", 6, FALSE)))
-			scheme = (char *)SvPV_nolen(*svp);
-
-		ld = _connect(host, port, version, scheme);
-
-		HV* stash = gv_stashpv("Net::LDAPxs", GV_ADDWARN);
-		SV* object;
-		HV* options = newHV();
-
-		hv_store(options, "host", 4, newSVpv(host, 0), 0);
-		hv_store(options, "port", 4, newSViv(port), 0);
-		hv_store(options, "ld", 2, newSViv(ld), 0);
-		object = newRV_noinc((SV*)options);
-		sv_bless(object, stash);
-
-		EXTEND(SP, 1);
-		PUSHs(sv_2mortal(object));
-
-int
-_bind(class)
-		HV* class
-	PREINIT:
-		LDAP* ld;
-		int rc;
-		SV** svp;
-		char *binddn, *bindpasswd;
-		int msgidp;
-		struct berval   passwd = { 0, NULL };
-	PPCODE:
-		if ((svp = hv_fetch(class, "ld", 2, FALSE)))
-			ld = (LDAP *)SvIV(*svp);
-		if ((svp = hv_fetch(class, "binddn", 6, FALSE)))
-			binddn = (char *)SvPV_nolen(*svp);
-		if ((svp = hv_fetch(class, "bindpasswd", 10, FALSE)))
-			bindpasswd = (char *)SvPV_nolen(*svp);
-
-		passwd.bv_val = ber_strdup( bindpasswd );
-		passwd.bv_len = strlen( passwd.bv_val );
-
-		rc = ldap_sasl_bind( ld, binddn, LDAP_SASL_SIMPLE, &passwd, NULL, NULL, &msgidp );
-		EXTEND(SP, 1);
-		if (rc == LDAP_SUCCESS) {
-			PUSHs(sv_2mortal(newSViv(rc)));
 		}else{
-			SV* errorno = newSVpv(ldap_err2string(rc), 0);
-			PUSHs(sv_2mortal(newRV_noinc((SV*)errorno)));
-			//fprintf( stderr, _("%s: ldap_sasl_bind: %s (%d)\n"),
-			//	"bindpy", ldap_err2string( rc ), rc );
+			croak("_new(host): not a string");
+		}
+		if ((svp = hv_fetch(args, "port", 4, FALSE)) && SvIOK(*svp)) {
+			port = SvIV(*svp);
+		}else{
+			croak("_new(port): not a number");
+		}
+		if ((svp = hv_fetch(args, "version", 7, FALSE))  && SvIOK(*svp)) {
+			version = SvIV(*svp);
+		}else{
+			croak("_new(version): not a number");
+		}
+		if ((svp = hv_fetch(args, "scheme", 6, FALSE)) && SvPOK(*svp)) {
+			scheme = (char *)SvPV_nolen(*svp);
+		}else{
+			croak("_new(scheme): not a string");
 		}
 
-void
-_unbind(class)
-		HV* class
-	PREINIT:
-		LDAP* ld;
-		SV** svp;
-	PPCODE:
-		if ((svp = hv_fetch(class, "ld", 2, FALSE)))
-			ld = (LDAP *)SvIV(*svp);
-		ldap_unbind_ext(ld, NULL, NULL);
+		RETVAL = _connect(host, port, version, scheme);
+	OUTPUT:
+		RETVAL
 
 SV *
-_search(class)
-		HV* class
+_bind(ld, opt)
+		LDAP *ld
+		HV *opt
 	PREINIT:
-		LDAP* ld;
+		SV** svp;
+		int rc;
+		char *binddn, *bindpasswd;
+		int async;
+		int msgid;
+		struct berval   passwd = { 0, NULL };
+
+		char *matched = NULL, *errmsg = NULL; 
+		char **referrals;
+		LDAPControl **resultctrls = NULL;
+		LDAPMessage *result;
+		struct berval       *servercredp;
+	CODE:
+		if ((svp = hv_fetch(opt, "binddn", 6, FALSE)) && SvPOK(*svp)) {
+			binddn = (char *)SvPV_nolen(*svp);
+		}else{
+			croak("_bind(binddn): not a string");
+		}
+		if (hv_exists(opt, "bindpw", 6)) {
+			if ((svp = hv_fetch(opt, "bindpw", 6, FALSE)) && SvPOK(*svp)) {
+				bindpasswd = (char *)SvPV_nolen(*svp);
+				passwd.bv_val = ber_strdup( bindpasswd );
+				passwd.bv_len = strlen( passwd.bv_val );
+			}else{
+				croak("_bind(bindpw): not a string");
+			}
+		}else{
+			bindpasswd = NULL;
+		}
+		if ((svp = hv_fetch(opt, "async", 5, FALSE)) && SvIOK(*svp)) {
+			async = SvIV(*svp);
+		}else{
+			croak("_bind(async): not a number");
+		}
+
+		if (async == 0) {
+			/* Synchronous bind request &passwd*/
+			if (bindpasswd != NULL) {
+				rc = ldap_sasl_bind_s( ld, binddn, LDAP_SASL_SIMPLE, &passwd, NULL, NULL, &servercredp );
+			}else{
+				/* Do anonymous bind */
+				rc = ldap_bind_s( ld, binddn, NULL, LDAP_AUTH_SIMPLE);
+			}
+		}else if(async == 1) {
+			/* The asynchronous version of this API only supports the LDAP_SASL_SIMPLE mechanism. */
+			if (bindpasswd != NULL) {
+				rc = ldap_sasl_bind( ld, binddn, LDAP_SASL_SIMPLE, &passwd, NULL, NULL, &msgid );
+				ldap_result( ld, msgid, LDAP_MSG_ALL, NULL, &result );
+				ldap_parse_result( ld, result, &rc, &matched, &errmsg, &referrals, &resultctrls, 0 ); 
+			}else{
+				/* Do anonymous bind */
+				/* ldap_bind will cause the problem of "Operations error" so we use ldap_bind_s instead. */
+				rc = ldap_bind_s( ld, binddn, NULL, LDAP_AUTH_SIMPLE);
+			}
+		}else{ }
+		RETVAL = rc_exception(rc);
+	OUTPUT:
+		RETVAL
+
+void
+_unbind(ld)
+		LDAP* ld
+	PPCODE:
+		ldap_unbind_ext(ld, NULL, NULL);
+
+void
+_search(ld, opt)
+		LDAP *ld
+		HV *opt
+	PREINIT:
 		int rc, parse_rc;
 		SV** svp;
 
@@ -327,12 +385,13 @@ _search(class)
 		int scope;
 		char *filter;
 		int sizelimit;
+		int async;
 
 		SV** elem;
 		AV* avref;
-		int len, i;
+		int len;
 		char **attrs = NULL;
-		LDAPMessage *res;
+		LDAPMessage *result;
 		AV* entries;
 
 		HV* ctrl;
@@ -341,26 +400,47 @@ _search(class)
 		int critical;
 
 		char *attrfail, *matched = NULL, *errmsg = NULL; 
-		char **vals, **referrals;
+		char **referrals;
 		unsigned long rcode;
 		LDAPControl *sortctrl = NULL;
 		LDAPControl *requestctrls[2];
 		LDAPControl **resultctrls = NULL;
 		LDAPSortKey **sortkeylist;
-	PPCODE:
-		if ((svp = hv_fetch(class, "ld", 2, FALSE)))
-			ld = (LDAP *)SvIV(*svp);
-		if ((svp = hv_fetch(class, "base", 4, FALSE)))
-			base = (char *)SvPV_nolen(*svp);
-		if ((svp = hv_fetch(class, "scope", 5, FALSE)))
-			scope = SvIV(*svp);
-		if ((svp = hv_fetch(class, "filter", 6, FALSE)))
-			filter = (char *)SvPV_nolen(*svp);
-		if ((svp = hv_fetch(class, "sizelimit", 9, FALSE)))
-			sizelimit = SvIV(*svp);
-		if ((svp = hv_fetch(class, "attrs", 5, FALSE))) {
-			avref = (AV*)SvRV(*svp);
+		int msgid;
 
+		HV* search_result;
+		HV* stash;
+		SV* blessed_result;
+	PPCODE:
+		if ((svp = hv_fetch(opt, "base", 4, FALSE)) && SvPOK(*svp)) {
+			base = (char *)SvPV_nolen(*svp);
+		}else{
+			croak("_search(base): not a string");
+		}
+		if ((svp = hv_fetch(opt, "scope", 5, FALSE)) && SvIOK(*svp)) {
+			scope = SvIV(*svp);
+		}else{
+			croak("_search(scope): not a number");
+		}
+		if ((svp = hv_fetch(opt, "filter", 6, FALSE)) && SvPOK(*svp)) {
+			filter = (char *)SvPV_nolen(*svp);
+		}else{
+			croak("_search(filter): not a string");
+		}
+		if ((svp = hv_fetch(opt, "sizelimit", 9, FALSE)) && SvIOK(*svp)) {
+			sizelimit = SvIV(*svp);
+		}else{
+			croak("_search(sizelimit): not a number");
+		}
+		if ((svp = hv_fetch(opt, "async", 5, FALSE)) && SvIOK(*svp)) {
+			async = SvIV(*svp);
+		}else{
+			croak("_search(async): not a number");
+		}
+
+		if ((svp = hv_fetch(opt, "attrs", 5, FALSE)) && SvROK(*svp)) {
+			int i;
+			avref = (AV*)SvRV(*svp);
 			len = av_len(avref) + 1;
 			attrs = (char **)malloc((len+1)*sizeof(char *));
 			for (i = 0; i < len; i++) {
@@ -370,16 +450,28 @@ _search(class)
 				}
 			}
 			attrs[i] = NULL;
+		}else{
+			croak("_search(attrs): not a ref");
 		}
-		if ((svp = hv_fetch(class, "control", 7, FALSE))) {
+		if ((svp = hv_fetch(opt, "control", 7, FALSE))) {
+			/* there is a control request */
 			if (SvROK(*svp) && SvTYPE(SvRV(*svp)) == SVt_PVHV) {
 				ctrl = (HV*)SvRV(*svp);
-				if ((svp = hv_fetch(ctrl, "type", 4, FALSE)))
+				if ((svp = hv_fetch(ctrl, "type", 4, FALSE)) && SvIOK(*svp)) {
 					type = SvIV(*svp);
-				if ((svp = hv_fetch(ctrl, "value", 5, FALSE)))
+				}else{
+					croak("_search(ctrl-type): not a number");
+				}
+				if ((svp = hv_fetch(ctrl, "value", 5, FALSE)) && SvPOK(*svp)) {
 					value = (char *)SvPV_nolen(*svp);
-				if ((svp = hv_fetch(ctrl, "critical", 8, FALSE)))
+				}else{
+					croak("_search(ctrl-value): not a string");
+				}
+				if ((svp = hv_fetch(ctrl, "critical", 8, FALSE)) && SvIOK(*svp)) {
 					critical = SvIV(*svp);
+				}else{
+					croak("_search(ctrl-critical): not a number");
+				}
 			}
 			switch (type) {
 				case 1: 
@@ -387,7 +479,7 @@ _search(class)
 					rc = ldap_create_sort_control( ld, sortkeylist, 1, &sortctrl ); 
 					if (rc != LDAP_SUCCESS) { 
 						fprintf( stderr, "ldap_create_sort_control: %s\n", ldap_err2string(rc) ); 
-						ldap_unbind(ld); 
+						ldap_unbind_ext(ld, NULL, NULL);
 						exit( EXIT_FAILURE );
 					} 
 					requestctrls[0] = sortctrl; 
@@ -398,64 +490,89 @@ _search(class)
 					break;
 			}
 		}else{
-			/* there is no control required */
+			/* there is no control request */
 			requestctrls[0] = NULL;
 			requestctrls[1] = NULL;
 		}
 
-		if (ldap_search_ext_s(ld, base, scope, filter, attrs, 0,
-					requestctrls, NULL, LDAP_NO_LIMIT, sizelimit, &res) != LDAP_SUCCESS) {
-			ldap_perror(ld, "ldap_search_ext_s");
-			exit( EXIT_FAILURE );
-		}
-		switch (type) {
-			case 1:
-				parse_rc = ldap_parse_result( ld, res, &rc, &matched, &errmsg, &referrals, &resultctrls, 0 ); 
-				if (parse_rc != LDAP_SUCCESS) { 
-					fprintf( stderr, "ldap_parse_result: %s\n", ldap_err2string(parse_rc) ); 
-					ldap_unbind(ld); 
-					exit( EXIT_FAILURE );
-				} 
-
-				parse_rc = ldap_parse_sort_control( ld, resultctrls, &rcode, &attrfail );
-				if (parse_rc != LDAP_SUCCESS) { 
-					fprintf( stderr, "ldap_parse_sort_control: %s\n", ldap_err2string(parse_rc) ); 
-					ldap_unbind(ld); 
-					exit( EXIT_FAILURE );
-				} 
-				if (rcode != LDAP_SUCCESS) { 
-					fprintf( stderr, "Sort error: %s\n", ldap_err2string(rcode) ); 
-					if (attrfail != NULL && *attrfail != '\0') { 
-						fprintf( stderr, "Bad attribute: %s\n", attrfail ); 
-					} 
-					ldap_unbind(ld); 
-					exit( EXIT_FAILURE );
-				} 
-				ldap_free_sort_keylist( sortkeylist );
-				ldap_control_free( sortctrl );
-				ldap_controls_free( resultctrls );
-				break;
-			default:
-				break;
-		}
-		free(attrs);
-		/* store all entries */
-		entries = get_entries(ld, res);
-		ldap_msgfree(res);
-
-		HV* search_result = newHV();
-		hv_store(search_result, "parent", 6, newRV_noinc((SV*)class), 0);
-		hv_store(search_result, "entries", 7, newRV_noinc((SV*)entries), 0);
-		hv_store(search_result, "mesgid", 6, newSViv(i), 0);
-
-		HV* stash;
-		SV* blessed_result;
-		stash = gv_stashpv("Net::LDAPxs::Search", GV_ADD);
-		blessed_result = newRV_inc((SV*)search_result);
-		sv_bless(blessed_result, stash);
-
 		EXTEND(SP, 1);
-		PUSHs(sv_2mortal(blessed_result));
+		if (async == 0) {
+			/* Synchronous bind request */
+			rc = ldap_search_ext_s(ld, base, scope, filter, attrs, 0,
+				requestctrls, NULL, LDAP_NO_LIMIT, sizelimit, &result);
+    		if (rc != LDAP_SUCCESS) {
+    			PUSHs(sv_2mortal(rc_exception(rc)));
+    		}else{
+        		switch (type) {
+        			case 1:
+        				parse_rc = ldap_parse_result( ld, result, &rc, &matched, &errmsg, &referrals, &resultctrls, 0 ); 
+        				if (parse_rc != LDAP_SUCCESS) { 
+        					fprintf( stderr, "ldap_parse_result: %s\n", ldap_err2string(parse_rc) ); 
+							ldap_unbind_ext(ld, NULL, NULL);
+        					exit( EXIT_FAILURE );
+        				} 
+
+        				parse_rc = ldap_parse_sort_control( ld, resultctrls, &rcode, &attrfail );
+//        				parse_rc = ldap_parse_sortresponse_control( ld, resultctrls, &rcode, &attrfail );
+        				if (parse_rc != LDAP_SUCCESS) { 
+        					fprintf( stderr, "ldap_parse_sort_control: %s\n", ldap_err2string(parse_rc) ); 
+        					//ldap_unbind(ld); 
+							ldap_unbind_ext(ld, NULL, NULL);
+        					exit( EXIT_FAILURE );
+        				} 
+        				if (rcode != LDAP_SUCCESS) { 
+        					fprintf( stderr, "Sort error: %s\n", ldap_err2string(rcode) ); 
+        					if (attrfail != NULL && *attrfail != '\0') { 
+        						fprintf( stderr, "Bad attribute: %s\n", attrfail ); 
+        					} 
+        					//ldap_unbind(ld); 
+							ldap_unbind_ext(ld, NULL, NULL);
+        					exit( EXIT_FAILURE );
+        				} 
+        				ldap_free_sort_keylist( sortkeylist );
+        				ldap_control_free( sortctrl );
+        				ldap_controls_free( resultctrls );
+        				break;
+        			default:
+        				break;
+        		}
+        		free(attrs);
+        		entries = get_entries(ld, result);
+        		ldap_msgfree(result);
+        
+        		search_result = newHV();
+        		hv_store(search_result, "entries", 7, newRV_noinc((SV*)entries), 0);
+        		hv_store(search_result, "mesgid", 6, newSViv(len-1), 0);
+        
+        		stash = gv_stashpv("Net::LDAPxs::Search", GV_ADD);
+        		blessed_result = newRV_inc((SV*)search_result);
+        		sv_bless(blessed_result, stash);
+        
+        		PUSHs(sv_2mortal(blessed_result));
+    		}
+		}else if (async == 1) {
+			/* Asynchronous bind request */
+			rc = ldap_search_ext(ld, base, scope, filter, attrs, 0,
+				requestctrls, NULL, LDAP_NO_LIMIT, sizelimit, &msgid);
+			ldap_result( ld, msgid, LDAP_MSG_ALL, NULL, &result );
+			ldap_parse_result( ld, result, &rc, &matched, &errmsg, &referrals, &resultctrls, 0 );
+			if (rc != LDAP_SUCCESS) {
+				PUSHs(sv_2mortal(rc_exception(rc)));
+			}else{
+        		entries = get_entries(ld, result);
+        		ldap_msgfree(result);
+        
+        		search_result = newHV();
+        		hv_store(search_result, "entries", 7, newRV_noinc((SV*)entries), 0);
+        		hv_store(search_result, "mesgid", 6, newSViv(len-1), 0);
+        
+        		stash = gv_stashpv("Net::LDAPxs::Search", GV_ADD);
+        		blessed_result = newRV_inc((SV*)search_result);
+        		sv_bless(blessed_result, stash);
+        
+        		PUSHs(sv_2mortal(blessed_result));
+			}
+		}else{ }
 
 
 int
@@ -469,155 +586,137 @@ count(ld, res)
 		RETVAL
 
 
-void
-_add(class, dn, attrs_ref)
-		HV* class
+SV *
+_add(ld, dn, attrs_ref)
+		LDAP *ld
 		char *dn
 		SV* attrs_ref
 	PREINIT:
-		LDAP* ld;
-		SV** svp;
 		HV *attrs_hv;
-	PPCODE:
-		if ((svp = hv_fetch(class, "ld", 2, FALSE)))
-			ld = (LDAP *)SvIV(*svp);
-
+		int rc;
+	CODE:
 		if (SvROK(attrs_ref) &&
 			SvTYPE(SvRV(attrs_ref)) == SVt_PVHV)
 		{
+			LDAPMod **list_of_attrs; 
 			attrs_hv = (HV*)SvRV(attrs_ref);
 
-			LDAPMod **list_of_attrs; 
 			ldap_add_mods(attrs_hv, &list_of_attrs);
-			if (ldap_add_ext_s(ld, dn, list_of_attrs, NULL, NULL) != LDAP_SUCCESS) {
-				ldap_perror(ld, "ldap_add_ext_s");
-				exit( EXIT_FAILURE );
-			}
+			rc = ldap_add_ext_s(ld, dn, list_of_attrs, NULL, NULL);
 			free_attrs(list_of_attrs);
+			RETVAL = rc_exception(rc);
 		}else{
 			Perl_croak(aTHX_ "The value for option 'attrs' should be a hash ref");
 		}
+	OUTPUT:
+		RETVAL
 
 
-void
-_modify(class, dn, attrs_ref)
-		HV* class
+SV *
+_modify(ld, dn, attrs_ref)
+		LDAP *ld
 		char *dn
 		SV* attrs_ref
 	PREINIT:
-		LDAP* ld;
-		SV** svp;
 		AV *attrs_av;
-	PPCODE:
-		if ((svp = hv_fetch(class, "ld", 2, FALSE)))
-			ld = (LDAP *)SvIV(*svp);
-
+		int rc;
+	CODE:
 		if (SvROK(attrs_ref) &&
 			SvTYPE(SvRV(attrs_ref)) == SVt_PVAV)
 		{
+			LDAPMod **list_of_attrs; 
 			attrs_av = (AV*)SvRV(attrs_ref);
 
-			LDAPMod **list_of_attrs; 
 			ldapmod_struct(attrs_av, &list_of_attrs);
-			if (ldap_modify_ext_s(ld, dn, list_of_attrs, NULL, NULL) != LDAP_SUCCESS) {
-				ldap_perror(ld, "ldap_modify_ext_s");
-				exit( EXIT_FAILURE );
-			}
+			rc = ldap_modify_ext_s(ld, dn, list_of_attrs, NULL, NULL);
 			free_attrs(list_of_attrs);
+			RETVAL = rc_exception(rc);
 		}else{
 			Perl_croak(aTHX_ "The value for option should be a hash ref");
 		}
+	OUTPUT:
+		RETVAL
 
 
-void
-_moddn(class, dn, attrs_ref)
-		HV* class
+SV *
+_moddn(ld, dn, attrs_ref)
+		LDAP *ld
 		char *dn
 		SV* attrs_ref
 	PREINIT:
-		LDAP* ld;
 		SV** svp;
 		HV *attrs_hv;
 
+		int rc;
+
 		char *newrdn=NULL;
 		char *newSuperior=NULL;
-		int deleteoldrdn;
-	PPCODE:
-		if ((svp = hv_fetch(class, "ld", 2, FALSE)))
-			ld = (LDAP *)SvIV(*svp);
-
+		int deleteoldrdn=0;
+	CODE:
 		if (SvROK(attrs_ref) &&
 			SvTYPE(SvRV(attrs_ref)) == SVt_PVHV)
 		{
 			attrs_hv = (HV*)SvRV(attrs_ref);
 
-			if ((svp = hv_fetch(attrs_hv, "newrdn", 6, FALSE)))
+			if ((svp = hv_fetch(attrs_hv, "newrdn", 6, FALSE)) && SvPOK(*svp)) {
 				newrdn = (char *)SvPV_nolen(*svp);
-			if ((svp = hv_fetch(attrs_hv, "newSuperior", 11, FALSE)))
-				newSuperior = (char *)SvPV_nolen(*svp);
-			if ((svp = hv_fetch(attrs_hv, "deleteoldrdn", 12, FALSE)))
-				deleteoldrdn = SvIV(*svp);
-
-			if (ldap_rename_s(ld, dn, newrdn, newSuperior, deleteoldrdn, NULL, NULL) != LDAP_SUCCESS) {
-				ldap_perror(ld, "ldap_rename_s");
-				exit( EXIT_FAILURE );
+			}else{
+				croak("_moddn(newrdn): not a string");
 			}
+			if ((svp = hv_fetch(attrs_hv, "newsuperior", 11, FALSE)) && SvPOK(*svp)) {
+				newSuperior = (char *)SvPV_nolen(*svp);
+			}else{
+				/* if no "newsuperior" present, use default value. */
+			}
+			if ((svp = hv_fetch(attrs_hv, "deleteoldrdn", 12, FALSE)) && SvIV(*svp)) {
+				deleteoldrdn = SvIV(*svp);
+			}else{
+				croak("_moddn(deleteoldrdn): not a string");
+			}
+			rc = ldap_rename_s(ld, dn, newrdn, newSuperior, deleteoldrdn,NULL, NULL);
+			RETVAL = rc_exception(rc);
 		}else{
 			Perl_croak(aTHX_ "The value for option should be a hash ref");
 		}
+	OUTPUT:
+		RETVAL
 
 
-int
-_compare(class, dn, attr, value)
-		HV* class
+SV *
+_compare(ld, dn, attr, value)
+		LDAP *ld
 		char *dn
 		char *attr
 		char *value
 	PREINIT:
-		LDAP* ld;
-		SV** svp;
-
 		struct berval bvalue = { 0, NULL };
 		int rc;
-	PPCODE:
-		if ((svp = hv_fetch(class, "ld", 2, FALSE)))
-			ld = (LDAP *)SvIV(*svp);
-
+	CODE:
 		bvalue.bv_val = strdup( value );
 		bvalue.bv_len = strlen( bvalue.bv_val );
 
 		rc = ldap_compare_ext_s(ld, dn, attr, &bvalue, NULL, NULL); 
 		free(bvalue.bv_val);
-
-		EXTEND(SP, 1);
 		if (rc == LDAP_COMPARE_TRUE) {
-			PUSHs(sv_2mortal(newSViv(rc)));
+			RETVAL = rc_exception(0);
 		}else{
-			SV* errorno = newSVpv(ldap_err2string(rc), 0);
-			PUSHs(sv_2mortal(newRV_noinc((SV*)errorno)));
+			RETVAL = rc_exception(rc);
 		}
+	OUTPUT:
+		RETVAL
 
-int
-_delete(class, dn)
-		HV* class
+SV *
+_delete(ld, dn)
+		LDAP *ld
 		char *dn
 	PREINIT:
-		LDAP* ld;
-		SV** svp;
-
 		int rc;
-	PPCODE:
-		if ((svp = hv_fetch(class, "ld", 2, FALSE)))
-			ld = (LDAP *)SvIV(*svp);
-
+	CODE:
 		rc = ldap_delete_ext_s(ld, dn, NULL, NULL);
-		EXTEND(SP, 1);
-		if (rc == LDAP_SUCCESS) {
-			PUSHs(sv_2mortal(newSViv(rc)));
-		}else{
-			SV* errorno = newSVpv(ldap_err2string(rc), 0);
-			PUSHs(sv_2mortal(newRV_noinc((SV*)errorno)));
-		}
+		RETVAL = rc_exception(rc);
+	OUTPUT:
+		RETVAL
+
 
 
 
@@ -628,18 +727,16 @@ REQUIRE:    1.929
 INCLUDE: const-xs.inc
 
 
-void *
+SV *
 new(class, args_ref)
-		char *class
 		SV *args_ref
 	PREINIT:
 		HV *args;
 		char *value;
 		int critical;
 
-		LDAP* ld;
 		SV** svp;
-	PPCODE:
+	CODE:
 		if (SvROK(args_ref) &&
 			SvTYPE(SvRV(args_ref)) == SVt_PVHV)
 		{
@@ -647,11 +744,13 @@ new(class, args_ref)
 		}else{
 			Perl_croak(aTHX_ "Usage: Net::LDAPxs->new(HOST, port => PORT)");
 		}
-
 		if ((svp = hv_fetch(args, "value", 5, FALSE)))
 			value = (char *)SvPV_nolen(*svp);
 		if ((svp = hv_fetch(args, "critical", 8, FALSE)))
 			critical = SvIV(*svp);
 
-		printf("%s", value);
+		RETVAL = rc_exception(0);
+	OUTPUT:
+		RETVAL
+
 

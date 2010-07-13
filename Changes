@@ -20,4 +20,10 @@ Revision history for Perl extension Net::LDAPxs.
 0.05 Wed Dec 30 2009
 	- modify function
 	- moddn function
+1.20 Tue Jul 13 2010
+	- fundamentally change the underlying mechanism
+	- add a new module Net::LDAPxs::Exception
+	- improved the typemap
+	- improved exceptions handling system
+	- fixed a number of bugs
 

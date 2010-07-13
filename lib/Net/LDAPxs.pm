@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2008-2009 Pan Yu (xiaocong@vip.163.com). 
+# Copyright (c) 2008-2010 Pan Yu (xiaocong@vip.163.com). 
 # All rights reserved.
 # This program is free software; you can redistribute it and/or
 # modify it under the same terms as Perl itself.
@@ -13,8 +13,9 @@ use Exporter;
 use DynaLoader;
 use vars qw($VERSION);
 use vars qw($DEFAULT_LDAP_VERSION $DEFAULT_LDAP_PORT $DEFAULT_LDAP_SCHEME);
+use Net::LDAPxs::Exception;
 
-$VERSION = '0.05';
+$VERSION = '1.20';
 
 our @ISA = qw(Exporter DynaLoader);
 
@@ -28,6 +29,7 @@ bootstrap Net::LDAPxs;
 $DEFAULT_LDAP_VERSION	= 3; 
 $DEFAULT_LDAP_PORT		= 389; 
 $DEFAULT_LDAP_SCHEME	= 'ldap'; 
+
 
 my $error = {
 		'die'	=> sub { require Carp; Carp::croak(@_); },
@@ -67,48 +69,47 @@ sub new {
 	return _new($class, $arg_ref);
 }
 
+my %async = (0 => 0, 1 => 1);
 sub bind {
 	my $self = shift;
 	my $binddn = shift;
 	my $arg_ref = { @_ };
 
-	$self->{binddn} = $binddn;
-	$self->{bindpasswd} = $arg_ref->{password};
-	my $rc = $self->_bind();
+	my $opt;
+	$opt->{binddn} = $binddn;
+	$opt->{bindpw} = $arg_ref->{password} if defined $arg_ref->{password};
+	$opt->{async} = $async{$arg_ref->{async} || 0};
 
-	if (ref($rc)) {
-		$self->_set_err($$rc);
-		return;
-	}
+	$self->_bind($opt);
 }
 
 sub unbind {
-	my $self = shift;
-
-	$self->_unbind();
+	shift->_unbind();
 }
 
-my %scope = qw( base 0 one 1 sub 2 children 3 );
+my %scope = ('base' => 0, 'one' => 1, 'sub' => 2, 'children' => 3);
 
 sub search {
 	my $self = shift;
 	my $arg_ref = { @_ };
 
+	my $opt;
 	require Net::LDAPxs::Search;
-	$self->{base} = $arg_ref->{base};
-	$self->{filter} = $arg_ref->{filter};
-
+	$opt->{base} = $arg_ref->{base};
+	$opt->{filter} = $arg_ref->{filter};
+	$opt->{async} = $async{$arg_ref->{async}} || 0;
+	
 	if (exists $arg_ref->{scope}) {
 		my $scope = lc $arg_ref->{scope};
-		$self->{scope} = (exists $scope{$scope}) ? $scope{$scope} : 2;
+		$opt->{scope} = (exists $scope{$scope}) ? $scope{$scope} : 2;
 	}else{
-		$arg_ref->{scope} = 2;
+		$opt->{scope} = 2;
 	}
-	$self->{sizelimit} ||= 0;
-	$self->{attrs} = $arg_ref->{attrs} if (defined $arg_ref->{attrs});
+	$opt->{sizelimit} ||= 0;
+	$opt->{attrs} = $arg_ref->{attrs} if (defined $arg_ref->{attrs});
 	# process control if present
-	$self->{control} = $arg_ref->{control} if (defined $arg_ref->{control}); 
-	my $mesg = $self->_search();
+	$opt->{control} = $arg_ref->{control} if (defined $arg_ref->{control}); 
+	my $mesg = $self->_search($opt);
 
 	# process callback if present
 	if (defined $arg_ref->{callback}) {
@@ -164,12 +165,11 @@ sub moddn {
 	my $dn = shift;
 	my $arg_ref = { @_ };
 
-	if (exists $arg_ref->{newrdn}) {
-		$arg_ref->{deleteoldrdn} ||= 1;
-		$self->_moddn($dn, $arg_ref);
-	}else{
-		_error('die', "Option 'newrdn' is required");
-	}
+	_error('die', "Option 'newrdn' is required") 
+		unless exists $arg_ref->{newrdn};
+	$arg_ref->{deleteoldrdn} ||= 1;
+
+	$self->_moddn($dn, $arg_ref);
 }
 
 sub compare {
@@ -177,32 +177,14 @@ sub compare {
 	my $dn = shift;
 	my $arg_ref = { @_ };
 
-	my $rc = $self->_compare($dn, $arg_ref->{attr}, $arg_ref->{value});
-	if (ref($rc)) {
-		$self->_set_err($$rc);
-		return;
-	}
+	$self->_compare($dn, $arg_ref->{attr}, $arg_ref->{value});
 }
 
 sub delete {
 	my $self = shift;
 	my $dn = shift;
 
-	my $rc = $self->_delete($dn);
-	if (ref($rc)) {
-		$self->_set_err($$rc);
-		return;
-	}
-}
-
-sub _set_err {
-	my $self = shift;
-	$self->{err} = shift;
-}
-
-sub errstr {
-	my $self = shift;
-	$self->{err};
+	$self->_delete($dn);
 }
 
 
@@ -218,15 +200,15 @@ Net::LDAPxs - XS version of Net::LDAP
 
   use Net::LDAPxs;
 
-  $ldap = Net::LDAPxs->new('www.qosoft.com');
+  $ldap = Net::LDAPxs->new('www.example.com');
 
-  $ldap->bind('cn=Manager,dc=shallot,dc=com', password => 'secret');
+  $ldap->bind('cn=Manager,dc=example,dc=com', password => 'secret');
 
-  $msg = $ldap->search( base   => 'ou=language,dc=shallot,dc=com',
-                        filter => '(|(cn=aperture)(cn=shutter_speed))'
-                      );
+  $mesg = $ldap->search( base   => 'ou=language,dc=example,dc=com',
+                         filter => '(|(cn=aperture)(cn=shutter_speed))'
+                       );
 
-  @entries = $msg->entries();
+  @entries = $mesg->entries();
 
   foreach my $entry (@entries) {
       foreach my $attr ($entry->attributes()) {
@@ -247,7 +229,7 @@ performance by nearly 30 times.
 In order to benefit the migration from Net::LDAP to Net::LDAPxs, functions and 
 user interfaces of Net::LDAPxs keep the same as Net::LDAP, which means people 
 who migrate from Net::LDAP to Net::LDAPxs are able to leave their code 
-unchanged excepting altering the module name. 
+unchanged excepting altering the module name.
 
 =head1 CONSTRUCTOR
 
@@ -267,7 +249,7 @@ Port connect to the LDAP server.
 
 B<Example>
 
-  $ldap = Net::LDAPxs->new('www.qosoft.com',
+  $ldap = Net::LDAPxs->new('www.example.com',
                            port    => '389',
                            scheme  => 'ldap',
                            version => 3
@@ -280,11 +262,20 @@ Here is a list of implemented methods.
 
 =item bind ( DN, OPTIONS )
 
+=over 4
+
+=item async => 1
+
+Perform the bind operation asynchronously.
+
 B<Example>
 
-  $ldap->bind('cn=Manager,dc=shallot,dc=com', password => 'secret');
+  $mesg = $ldap->bind('cn=Manager,dc=example,dc=com', password => 'secret');
+  die $mesg->errstr if $mesg->code;
 
 =item unbind ( )
+
+=back
 
 B<Example>
 
@@ -332,12 +323,15 @@ to an array which contains the preferred attributes.
 
 B<Example>
 
-  $msg = $ldap->search( base      => 'ou=language,dc=shallot,dc=com',
+  $mesg = $ldap->search( base      => 'ou=language,dc=example,dc=com',
                         filter    => '(|(cn=aperture)(cn=shutter_speed))',
                         scope     => 'one',
                         sizelimit => 0,
                         attrs     => \@attrs
                       );
+  die $mesg->errstr if $mesg->code;
+
+=over 4
 
 =item control => ( CONTROL )
 
@@ -379,14 +373,11 @@ The attribute value to compare with.
 
 B<Example>
 
-  if (!defined $ldap->compare('ou=people,dc=shallot,dc=com',
-          attr  => 'objectClass',
-          value => 'top'
-      )) {
-      print $ldap->errstr;
-  }
-
-=back
+  $mesg = $ldap->compare( 'ou=people,dc=example,dc=com',
+                          attr  => 'gidNumber',
+                          value => '65534'
+                        );
+  die $mesg->errstr if $mesg->code;
 
 =item add ( DN, OPTIONS )
 
@@ -413,10 +404,9 @@ B<Example>
     objectClass => [qw(inetOrgPerson posixAccount top)]
   );
 
-  $ldap->add( 'uid=Lionel,ou=people,dc=shallot,dc=com',
-              attrs => \%attrs );
-
-=back
+  $mesg = $ldap->add( 'uid=Lionel,ou=people,dc=example,dc=com',
+                      attrs => \%attrs );
+  die $mesg->errstr if $mesg->code;
 
 =item delete ( DN )
 
@@ -424,9 +414,8 @@ Delete the entry given by C<DN> from the server. C<DN> is a string.
 
 B<Example>
 
-  if (!defined $ldap->delete('uid=Lionel,ou=people,dc=shallot,dc=com')) {
-	  print $ldap->errstr;
-  }
+  $mesg = $ldap->delete( 'uid=Lionel,ou=people,dc=example,dc=com' );
+  die $mesg->errstr if $mesg->code;
 
 =item moddn ( DN, OPTIONS )
 
@@ -440,7 +429,7 @@ This value should be a new RDN to assign to C<DN>.
 
 =item deleteoldrdn => 1
 
-This option should be passwd if the existing RDN is to be deleted.
+This option should be passed if the existing RDN is to be deleted.
 
 =item newsuperior => NEWDN
 
@@ -450,8 +439,9 @@ If given this value should be the DN of the new superior for C<DN>.
 
 B<Example>
 
-  $mesg = $ldap->moddn( uid=Lionel,ou=people,dc=shallot,dc=com, 
+  $mesg = $ldap->moddn( uid=Lionel,ou=people,dc=example,dc=com, 
                         newrdn => 'uid=Peter' );
+  die $mesg->errstr if $mesg->code;
 
 =item modify ( DN, OPTIONS )
 
@@ -467,16 +457,23 @@ reference to an array of strings if multiple values are wanted.
 
   %attrs = ( cn => ['buy', 'purchase'],
 		     description => 'to own something' );
-  $mesg = $ldap->modify( $dn,
-                         add => \%attrs );
+  $mesg = $ldap->modify( $dn, add => \%attrs );
+  die $mesg->errstr if $mesg->code;
 
 =item delete => [ ATTR, ... ]
 
 Delete complete attributes from the entry.
 
-  $mesg = $ldap->modify( $dn,
-    delete => ['member','description'] # Delete attributes
+  # Delete attributes
+  $mesg = $ldap->modify( $dn, delete => ['member','description'] );
+  die $mesg->errstr if $mesg->code;
+  
+  # Delete a group of attributes
+  %attrs = (
+      cn => ['Lex', 'Lionel'],
+      sn => 'Luther'
   );
+  $mesg = $ldap->modify( $dn, delete => \%attrs );
 
 =item delete => { ATTR => VALUE, ... }
 
@@ -529,7 +526,7 @@ advertizes support for LDAP_FEATURE_MODIFY_INCREMENT.
 
   $mesg = $ldap->modify( $dn,
     increment => {
-      uidNumber => 1 # increment uidNumber by 1
+      uidNumber => 1 # increase the uidNumber by 1
     }
   );
 
@@ -560,7 +557,7 @@ will be performed.
 
 =head1 DEVELOPMENT STAGE
 
-This module is still under development. The basic features have been done.  
+This module is currently in production. The advanced features will be available soon.
 
 =head1 BUGS and RECOMMENDATIONS
 
@@ -570,7 +567,7 @@ listed below. Bugs and functions will be updated at least every one month.
 =head1 ACKNOWLEDGEMENTS
 
 A special thanks to Larry Wall <larry@wall.org> for convincing me that no 
-development could be made to the Perl community without everyone's contribution.
+development could be made to the Perl community without people's contribution.
 
 =head1 AUTHOR
 
@@ -578,7 +575,7 @@ Pan Yu <xiaocong@vip.163.com>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2008-2009 by Pan Yu. All rights reserved.
+Copyright (C) 2008-2010 by Pan Yu. All rights reserved.
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself.

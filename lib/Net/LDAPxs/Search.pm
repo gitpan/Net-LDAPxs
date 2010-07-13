@@ -30,6 +30,8 @@ sub pop_entry {
 
 sub all_entries { goto &entries }
 
+sub code { }
+
 1;
 
 __END__
