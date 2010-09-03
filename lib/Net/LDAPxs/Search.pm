@@ -30,7 +30,10 @@ sub pop_entry {
 
 sub all_entries { goto &entries }
 
-sub code { }
+sub err {
+# This method is to avoid misusing the same function in Exception.pm.
+}
+
 
 1;
 

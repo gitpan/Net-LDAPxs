@@ -11,11 +11,12 @@ use strict;
 
 use Exporter;
 use DynaLoader;
+use Data::Dumper;
 use vars qw($VERSION);
 use vars qw($DEFAULT_LDAP_VERSION $DEFAULT_LDAP_PORT $DEFAULT_LDAP_SCHEME);
 use Net::LDAPxs::Exception;
 
-$VERSION = '1.20';
+$VERSION = '1.30';
 
 our @ISA = qw(Exporter DynaLoader);
 
@@ -96,8 +97,9 @@ sub search {
 	my $opt;
 	require Net::LDAPxs::Search;
 	$opt->{base} = $arg_ref->{base};
-	$opt->{filter} = $arg_ref->{filter};
-	$opt->{async} = $async{$arg_ref->{async}} || 0;
+	$opt->{filter} = $arg_ref->{filter} || '(objectClass=top)';
+	$arg_ref->{async} = defined $arg_ref->{async} ? $arg_ref->{async} : 0;
+	$opt->{async} = $async{$arg_ref->{async}};
 	
 	if (exists $arg_ref->{scope}) {
 		my $scope = lc $arg_ref->{scope};
@@ -271,7 +273,7 @@ Perform the bind operation asynchronously.
 B<Example>
 
   $mesg = $ldap->bind('cn=Manager,dc=example,dc=com', password => 'secret');
-  die $mesg->errstr if $mesg->code;
+  die $mesg->errstr if $mesg->err;
 
 =item unbind ( )
 
@@ -291,7 +293,7 @@ A base option is a DN which is the start search point.
 
 =item filter => ( a string )
 
-A filter is a string which format complies the RFC1960.
+A filter is a string which format complies the RFC1960. If no filter presents, the default value is (objectClass=top).
 
 =back
 
@@ -324,12 +326,12 @@ to an array which contains the preferred attributes.
 B<Example>
 
   $mesg = $ldap->search( base      => 'ou=language,dc=example,dc=com',
-                        filter    => '(|(cn=aperture)(cn=shutter_speed))',
-                        scope     => 'one',
-                        sizelimit => 0,
-                        attrs     => \@attrs
-                      );
-  die $mesg->errstr if $mesg->code;
+                         filter    => '(|(cn=aperture)(cn=shutter_speed))',
+                         scope     => 'one',
+                         sizelimit => 0,
+                         attrs     => \@attrs
+                       );
+  die $mesg->errstr if $mesg->err;
 
 =over 4
 
@@ -377,7 +379,7 @@ B<Example>
                           attr  => 'gidNumber',
                           value => '65534'
                         );
-  die $mesg->errstr if $mesg->code;
+  die $mesg->errstr if $mesg->err;
 
 =item add ( DN, OPTIONS )
 
@@ -406,7 +408,7 @@ B<Example>
 
   $mesg = $ldap->add( 'uid=Lionel,ou=people,dc=example,dc=com',
                       attrs => \%attrs );
-  die $mesg->errstr if $mesg->code;
+  die $mesg->errstr if $mesg->err;
 
 =item delete ( DN )
 
@@ -415,7 +417,7 @@ Delete the entry given by C<DN> from the server. C<DN> is a string.
 B<Example>
 
   $mesg = $ldap->delete( 'uid=Lionel,ou=people,dc=example,dc=com' );
-  die $mesg->errstr if $mesg->code;
+  die $mesg->errstr if $mesg->err;
 
 =item moddn ( DN, OPTIONS )
 
@@ -441,7 +443,7 @@ B<Example>
 
   $mesg = $ldap->moddn( uid=Lionel,ou=people,dc=example,dc=com, 
                         newrdn => 'uid=Peter' );
-  die $mesg->errstr if $mesg->code;
+  die $mesg->errstr if $mesg->err;
 
 =item modify ( DN, OPTIONS )
 
@@ -456,17 +458,17 @@ string if only a single value is wanted in the attribute, or a
 reference to an array of strings if multiple values are wanted.
 
   %attrs = ( cn => ['buy', 'purchase'],
-		     description => 'to own something' );
+    description => 'to own something' );
   $mesg = $ldap->modify( $dn, add => \%attrs );
-  die $mesg->errstr if $mesg->code;
+  die $mesg->errstr if $mesg->err;
 
 =item delete => [ ATTR, ... ]
 
 Delete complete attributes from the entry.
 
   # Delete attributes
-  $mesg = $ldap->modify( $dn, delete => ['member','description'] );
-  die $mesg->errstr if $mesg->code;
+  $mesg = $ldap->modify( $dn, delete => { description => [] } );
+  die $mesg->errstr if $mesg->err;
   
   # Delete a group of attributes
   %attrs = (
@@ -546,12 +548,8 @@ will be performed.
         description => 'A description',
         member      => $newMember,
       ],
-      delete => [
-        seeAlso => [],
-      ],
-      add => [
-        anotherAttribute => $value,
-      ],
+      delete => { seeAlso => [] },
+      add => { anotherAttribute => $value },
     ]
   );
 

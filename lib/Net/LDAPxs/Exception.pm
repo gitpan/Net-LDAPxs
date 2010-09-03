@@ -2,12 +2,13 @@ package Net::LDAPxs::Exception;
 
 use 5.006;
 use strict;
+use Data::Dumper;
 use vars qw($VERSION);
 
-$VERSION = '1.00';
+$VERSION = '1.01';
 
 
-sub code {
+sub err {
 	return 1 if shift->{code} != 0;
 }
 
@@ -15,6 +16,10 @@ sub errstr {
 	my $self = shift;
 
 	"Error code($self->{code}): $self->{mesg}";
+}
+
+sub code {
+	shift->{code};
 }
 
 1;
@@ -30,7 +35,7 @@ Net::LDAPxs::Exception - Object handling the exceptions
   use Net::LDAPxs;
   
   $mesg = $ldap->search( $dn, password => "secret" );
-  die $mesg->errstr if $mesg->code;
+  die $mesg->errstr if $mesg->err;
   
 =head1 DESCRIPTION
 

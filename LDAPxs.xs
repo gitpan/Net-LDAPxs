@@ -335,7 +335,9 @@ _bind(ld, opt)
 				croak("_bind(bindpw): not a string");
 			}
 		}else{
-			bindpasswd = NULL;
+			bindpasswd = "0";
+			passwd.bv_val = ber_strdup( bindpasswd );
+			passwd.bv_len = strlen( passwd.bv_val );
 		}
 		if ((svp = hv_fetch(opt, "async", 5, FALSE)) && SvIOK(*svp)) {
 			async = SvIV(*svp);
@@ -343,25 +345,15 @@ _bind(ld, opt)
 			croak("_bind(async): not a number");
 		}
 
+		ldap_set_option( ld, LDAP_OPT_REFERRALS, LDAP_OPT_ON );
+
 		if (async == 0) {
-			/* Synchronous bind request &passwd*/
-			if (bindpasswd != NULL) {
-				rc = ldap_sasl_bind_s( ld, binddn, LDAP_SASL_SIMPLE, &passwd, NULL, NULL, &servercredp );
-			}else{
-				/* Do anonymous bind */
-				rc = ldap_bind_s( ld, binddn, NULL, LDAP_AUTH_SIMPLE);
-			}
+			rc = ldap_sasl_bind_s( ld, binddn, LDAP_SASL_SIMPLE, &passwd, NULL, NULL, &servercredp );
 		}else if(async == 1) {
 			/* The asynchronous version of this API only supports the LDAP_SASL_SIMPLE mechanism. */
-			if (bindpasswd != NULL) {
-				rc = ldap_sasl_bind( ld, binddn, LDAP_SASL_SIMPLE, &passwd, NULL, NULL, &msgid );
-				ldap_result( ld, msgid, LDAP_MSG_ALL, NULL, &result );
-				ldap_parse_result( ld, result, &rc, &matched, &errmsg, &referrals, &resultctrls, 0 ); 
-			}else{
-				/* Do anonymous bind */
-				/* ldap_bind will cause the problem of "Operations error" so we use ldap_bind_s instead. */
-				rc = ldap_bind_s( ld, binddn, NULL, LDAP_AUTH_SIMPLE);
-			}
+			rc = ldap_sasl_bind( ld, binddn, LDAP_SASL_SIMPLE, &passwd, NULL, NULL, &msgid );
+			ldap_result( ld, msgid, LDAP_MSG_ALL, NULL, &result );
+			ldap_parse_result( ld, result, &rc, &matched, &errmsg, &referrals, &resultctrls, 0 ); 
 		}else{ }
 		RETVAL = rc_exception(rc);
 	OUTPUT:
@@ -378,7 +370,7 @@ _search(ld, opt)
 		LDAP *ld
 		HV *opt
 	PREINIT:
-		int rc, parse_rc;
+		int rc;
 		SV** svp;
 
 		char *base;
@@ -389,7 +381,7 @@ _search(ld, opt)
 
 		SV** elem;
 		AV* avref;
-		int len;
+		int len = 0;
 		char **attrs = NULL;
 		LDAPMessage *result;
 		AV* entries;
@@ -397,11 +389,10 @@ _search(ld, opt)
 		HV* ctrl;
 		int type = 0;
 		char *value;
-		int critical;
+		int critical = 0;
 
-		char *attrfail, *matched = NULL, *errmsg = NULL; 
+		char *matched = NULL, *errmsg = NULL; 
 		char **referrals;
-		unsigned long rcode;
 		LDAPControl *sortctrl = NULL;
 		LDAPControl *requestctrls[2];
 		LDAPControl **resultctrls = NULL;
@@ -442,16 +433,20 @@ _search(ld, opt)
 			int i;
 			avref = (AV*)SvRV(*svp);
 			len = av_len(avref) + 1;
-			attrs = (char **)malloc((len+1)*sizeof(char *));
-			for (i = 0; i < len; i++) {
-				elem = av_fetch(avref, i, 0);
-				if (elem != NULL) {
-					attrs[i] = (char *)SvPV_nolen(*elem);
+			if (len == 0) {
+				attrs = NULL;
+			}else{
+				attrs = (char **)malloc((len+1)*sizeof(char *));
+				for (i = 0; i < len; i++) {
+					elem = av_fetch(avref, i, 0);
+					if (elem != NULL) {
+						attrs[i] = (char *)SvPV_nolen(*elem);
+					}
 				}
+				attrs[i] = NULL;
 			}
-			attrs[i] = NULL;
 		}else{
-			croak("_search(attrs): not a ref");
+			attrs = NULL;
 		}
 		if ((svp = hv_fetch(opt, "control", 7, FALSE))) {
 			/* there is a control request */
@@ -472,75 +467,46 @@ _search(ld, opt)
 				}else{
 					croak("_search(ctrl-critical): not a number");
 				}
+			}else{
+				croak("_search(ctrl): control object is not a hash");
 			}
-			switch (type) {
-				case 1: 
-					ldap_create_sort_keylist( &sortkeylist, value );
-					rc = ldap_create_sort_control( ld, sortkeylist, 1, &sortctrl ); 
-					if (rc != LDAP_SUCCESS) { 
-						fprintf( stderr, "ldap_create_sort_control: %s\n", ldap_err2string(rc) ); 
-						ldap_unbind_ext(ld, NULL, NULL);
-						exit( EXIT_FAILURE );
-					} 
-					requestctrls[0] = sortctrl; 
-					requestctrls[1] = NULL;
-					break;
-				default:
-					Perl_croak(aTHX_ "Unknown control type"); 
-					break;
-			}
+
+		/* Server Side Sorting control */
+			ldap_create_sort_keylist( &sortkeylist, value );
+			rc = ldap_create_sort_control( ld, sortkeylist, critical, &sortctrl ); 
+			if (rc != LDAP_SUCCESS) { 
+				fprintf( stderr, "ldap_create_sort_control: %s\n", ldap_err2string(rc) ); 
+				ldap_unbind_ext(ld, NULL, NULL);
+				exit( EXIT_FAILURE );
+			} 
+			requestctrls[0] = sortctrl; 
+			requestctrls[1] = NULL;
+		/* end */
 		}else{
 			/* there is no control request */
 			requestctrls[0] = NULL;
 			requestctrls[1] = NULL;
 		}
 
+        search_result = newHV();
 		EXTEND(SP, 1);
 		if (async == 0) {
 			/* Synchronous bind request */
 			rc = ldap_search_ext_s(ld, base, scope, filter, attrs, 0,
 				requestctrls, NULL, LDAP_NO_LIMIT, sizelimit, &result);
+			if (requestctrls[0] != NULL) {
+			/* free the control */
+				ldap_free_sort_keylist( sortkeylist );
+				ldap_control_free( sortctrl );
+			}
+
     		if (rc != LDAP_SUCCESS) {
     			PUSHs(sv_2mortal(rc_exception(rc)));
     		}else{
-        		switch (type) {
-        			case 1:
-        				parse_rc = ldap_parse_result( ld, result, &rc, &matched, &errmsg, &referrals, &resultctrls, 0 ); 
-        				if (parse_rc != LDAP_SUCCESS) { 
-        					fprintf( stderr, "ldap_parse_result: %s\n", ldap_err2string(parse_rc) ); 
-							ldap_unbind_ext(ld, NULL, NULL);
-        					exit( EXIT_FAILURE );
-        				} 
-
-        				parse_rc = ldap_parse_sort_control( ld, resultctrls, &rcode, &attrfail );
-//        				parse_rc = ldap_parse_sortresponse_control( ld, resultctrls, &rcode, &attrfail );
-        				if (parse_rc != LDAP_SUCCESS) { 
-        					fprintf( stderr, "ldap_parse_sort_control: %s\n", ldap_err2string(parse_rc) ); 
-        					//ldap_unbind(ld); 
-							ldap_unbind_ext(ld, NULL, NULL);
-        					exit( EXIT_FAILURE );
-        				} 
-        				if (rcode != LDAP_SUCCESS) { 
-        					fprintf( stderr, "Sort error: %s\n", ldap_err2string(rcode) ); 
-        					if (attrfail != NULL && *attrfail != '\0') { 
-        						fprintf( stderr, "Bad attribute: %s\n", attrfail ); 
-        					} 
-        					//ldap_unbind(ld); 
-							ldap_unbind_ext(ld, NULL, NULL);
-        					exit( EXIT_FAILURE );
-        				} 
-        				ldap_free_sort_keylist( sortkeylist );
-        				ldap_control_free( sortctrl );
-        				ldap_controls_free( resultctrls );
-        				break;
-        			default:
-        				break;
-        		}
         		free(attrs);
         		entries = get_entries(ld, result);
         		ldap_msgfree(result);
         
-        		search_result = newHV();
         		hv_store(search_result, "entries", 7, newRV_noinc((SV*)entries), 0);
         		hv_store(search_result, "mesgid", 6, newSViv(len-1), 0);
         

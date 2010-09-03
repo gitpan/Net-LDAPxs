@@ -21,9 +21,15 @@ Revision history for Perl extension Net::LDAPxs.
 	- modify function
 	- moddn function
 1.20 Tue Jul 13 2010
-	- fundamentally change the underlying mechanism
-	- add a new module Net::LDAPxs::Exception
-	- improved the typemap
-	- improved exceptions handling system
-	- fixed a number of bugs
+	- Fundamentally changed the underlying mechanism
+	- Added a new module Net::LDAPxs::Exception
+	- Improved the typemap
+	- Improved exceptions handling system
+	- Fixed a number of bugs
+1.30 Fri Sep 3 2010
+	- Fixed the problem in server side sorting countrol
+	- Modified the user interface for 'modify function'
+	- Fixed a bug in Net::LDAPxs::Entry
+	- Fixed some bugs in XS code
+	- Updated the POD
 

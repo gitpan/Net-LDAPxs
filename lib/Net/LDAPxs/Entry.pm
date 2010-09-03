@@ -4,7 +4,7 @@ use 5.006;
 use strict;
 use vars qw($VERSION);
 
-$VERSION = '0.01';
+$VERSION = '1.00';
 
 
 sub dn { shift->{objectName}; }
@@ -20,6 +20,7 @@ sub get_value {
 	my $type = shift;
 
 	my $attrs = _build_attrs($self);
+	return unless $attrs->{$type};
 	@{$attrs->{$type}};
 }
 
