@@ -11,12 +11,11 @@ use strict;
 
 use Exporter;
 use DynaLoader;
-use Data::Dumper;
 use vars qw($VERSION);
 use vars qw($DEFAULT_LDAP_VERSION $DEFAULT_LDAP_PORT $DEFAULT_LDAP_SCHEME);
 use Net::LDAPxs::Exception;
 
-$VERSION = '1.30';
+$VERSION = '1.31';
 
 our @ISA = qw(Exporter DynaLoader);
 
@@ -569,7 +568,7 @@ development could be made to the Perl community without people's contribution.
 
 =head1 AUTHOR
 
-Pan Yu <xiaocong@vip.163.com>
+Pan Yu <xiaocong[AT]vip.163.com>
 
 =head1 COPYRIGHT AND LICENSE
 

@@ -2,7 +2,6 @@ package Net::LDAPxs::Exception;
 
 use 5.006;
 use strict;
-use Data::Dumper;
 use vars qw($VERSION);
 
 $VERSION = '1.01';

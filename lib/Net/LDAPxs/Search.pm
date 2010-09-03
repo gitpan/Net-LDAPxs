@@ -5,7 +5,7 @@ use strict;
 use vars qw($VERSION);
 use Net::LDAPxs::Entry;
 
-$VERSION = '0.01';
+$VERSION = '1.00';
 
 
 sub count { $#{shift->{entries}}+1; }
